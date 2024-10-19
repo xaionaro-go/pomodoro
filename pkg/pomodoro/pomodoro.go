@@ -1,11 +1,17 @@
 package pomodoro
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image/color"
+	"io"
+	"log"
+	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -13,6 +19,12 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/ebitengine/oto/v3"
+	"github.com/jfreymuth/oggvorbis"
+)
+
+const (
+	audioEnabled = false
 )
 
 type Pomodoro struct {
@@ -208,12 +220,69 @@ func (p *Pomodoro) EndTimer() {
 func (p *Pomodoro) setIsWork(isWork bool) {
 	if isWork {
 		p.Description.Text = "FOCUS"
+		p.setTimeLeft(p.NextWorkInterval)
 	} else {
 		p.Description.Text = "REST"
+		p.setTimeLeft(p.NextRestInterval)
 	}
 	p.IsWork = isWork
 }
 
 func (p *Pomodoro) endTimer() {
-	go p.Start(!p.IsWork)
+	if p.TickerCancel != nil {
+		p.TickerCancel()
+		p.TickerCancel = nil
+	}
+	if audioEnabled {
+		go func() {
+			err := p.playAlarm()
+			if err != nil {
+				log.Printf("%v", fmt.Errorf("unable to play the alarm sound: %w", err))
+			}
+		}()
+	}
+	p.setIsWork(!p.IsWork)
+}
+
+func (p *Pomodoro) playAlarm() error {
+	oggDecoder, err := oggvorbis.NewReader(bytes.NewReader(alarmSoundFile))
+	if err != nil {
+		return fmt.Errorf("unable to initialize a decoder of the ogg vorbis audio: %w", err)
+	}
+
+	buffer := make([]float32, 671558)
+	n, err := oggDecoder.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("unable to decode the ogg vorbis file: %w", err)
+	}
+	buffer = buffer[:n]
+
+	op := &oto.NewContextOptions{
+		SampleRate:   oggDecoder.SampleRate(),
+		ChannelCount: oggDecoder.Channels(),
+		Format:       oto.FormatFloat32LE,
+		BufferSize:   0,
+	}
+	otoCtx, readyChan, err := oto.NewContext(op)
+	if err != nil {
+		return fmt.Errorf("unable to initialize an oto context: %w", err)
+	}
+	<-readyChan
+
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&buffer))
+	hdr.Cap *= 4
+	hdr.Len *= 4
+
+	player := otoCtx.NewPlayer(bytes.NewReader(*(*[]byte)(unsafe.Pointer(hdr))))
+	player.Play()
+	for player.IsPlaying() {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	err = player.Close()
+	if err != nil {
+		return fmt.Errorf("unable to close the player: %w", err)
+	}
+
+	return nil
 }
