@@ -219,10 +219,10 @@ func (p *Pomodoro) EndTimer() {
 
 func (p *Pomodoro) setIsWork(isWork bool) {
 	if isWork {
-		p.Description.Text = "FOCUS"
+		p.Description.Text = "UNTIL BREAK"
 		p.setTimeLeft(p.NextWorkInterval)
 	} else {
-		p.Description.Text = "REST"
+		p.Description.Text = "BREAK"
 		p.setTimeLeft(p.NextRestInterval)
 	}
 	p.IsWork = isWork
